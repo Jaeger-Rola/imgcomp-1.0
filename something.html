@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Image Compiler to PDF - 500% Buttons</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background-color: #fafafa;
+    }
+    #drop-zone {
+      border: 2px dashed #999;
+      padding: 40px;
+      text-align: center;
+      margin-bottom: 10px;
+      cursor: pointer;
+      background-color: #f9f9f9;
+    }
+    #controls {
+      margin-bottom: 20px;
+    }
+    #controls label, #controls input, #controls button {
+      font-size: 16px;
+      margin-right: 10px;
+      vertical-align: middle;
+    }
+    #docName {
+      padding: 8px;
+      width: 200px;
+    }
+    button {
+      padding: 10px 15px;
+      margin: 5px 0;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    #preview {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .preview-item {
+      position: relative;
+      cursor: grab;
+      border: 1px solid #ccc;
+      padding: 5px;
+      background: white;
+    }
+    .preview-item img {
+      width: 750px;
+      max-width: 100%;
+      height: auto;
+      display: block;
+      transition: transform 0.2s ease;
+    }
+    .delete-btn, .rotate-btn {
+      position: absolute;
+      color: white;
+      border: none;
+      border-radius: 0;
+      aspect-ratio: 1 / 1;
+      cursor: pointer;
+      font-size: 7.5em;        /* 500% */
+      text-align: center;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+      z-index: 2;
+      padding: 0;
+      width: 60%;              /* 500% of original */
+      max-width: 150px;
+      background-clip: padding-box;
+      box-sizing: border-box;
+      line-height: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      user-select: none;
+    }
+    .delete-btn {
+      top: 0;
+      right: 0;
+      background: red;
+      border-top-right-radius: 8px;
+    }
+    .rotate-btn {
+      bottom: 0;
+      right: 0;
+      background: #007bff;
+      border-bottom-right-radius: 8px;
+    }
+    .rotate-90 { transform: rotate(90deg) !important; }
+    .rotate-180 { transform: rotate(180deg) !important; }
+    .rotate-270 { transform: rotate(270deg) !important; }
+    #export-modal {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 90vw;
+      height: 90vh;
+      background: #fff;
+      border: 2px solid #666;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+      overflow: hidden;
+      z-index: 9999;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    #export-modal h3 {
+      margin-top: 0;
+    }
+    #modal-close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      cursor: pointer;
+      font-size: 24px;
+      background: none;
+      border: none;
+      color: #333;
+    }
+    #export-preview {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 15px;
+      overflow-y: auto;
+      height: 100%;
+      box-sizing: border-box;
+      padding-right: 10px;
+    }
+    #export-preview canvas {
+      width: 20%;
+      height: auto;
+      border: 1px solid #ccc;
+      max-width: 100%;
+      object-fit: contain;
+      box-shadow: 0 0 5px rgba(0,0,0,0.1);
+    }
+  </style>
+</head>
+<body>
+
+<h2>Image Compiler</h2>
+
+<div id="drop-zone" onclick="fileInput.click()">Drag and drop images here or click to upload</div>
+
+<div id="controls">
+  <label for="docName">PDF Name:</label>
+  <input type="text" id="docName" placeholder="MyDocument" />
+  <button onclick="previewPDF()">Preview PDF</button>
+  <button onclick="exportPDF()">Export to PDF</button>
+</div>
+
+<input type="file" id="file-input" accept="image/*" multiple style="display:none" />
+
+<div id="preview"></div>
+
+<div id="export-modal">
+  <button id="modal-close" onclick="exportModal.style.display='none'">✖</button>
+  <h3>PDF Preview</h3>
+  <div id="export-preview"></div>
+</div>
+
+<canvas id="resizeCanvas" style="display:none;"></canvas>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const preview = document.getElementById('preview');
+  const resizeCanvas = document.getElementById('resizeCanvas');
+  const resizeCtx = resizeCanvas.getContext('2d');
+  const exportPreview = document.getElementById('export-preview');
+  const exportModal = document.getElementById('export-modal');
+
+  let imageDataList = [];
+  let dragSrcIndex = null;
+
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropZone.style.backgroundColor = '#e0e0e0';
+  });
+
+  dropZone.addEventListener('dragleave', () => {
+    dropZone.style.backgroundColor = '#f9f9f9';
+  });
+
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.style.backgroundColor = '#f9f9f9';
+    handleFiles(e.dataTransfer.files);
+  });
+
+  fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+
+  function handleFiles(files) {
+    Array.from(files).forEach(file => {
+      if (!file.type.startsWith('image/')) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.src = e.target.result;
+        img.onload = () => {
+          imageDataList.push({
+            src: img.src,
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+            rotation: 0
+          });
+          renderPreview();
+        };
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderPreview() {
+    preview.innerHTML = '';
+    imageDataList.forEach((data, index) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'preview-item';
+      wrapper.setAttribute('draggable', 'true');
+
+      const img = new Image();
+      img.src = data.src;
+      img.className = data.rotation ? `rotate-${data.rotation}` : '';
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'delete-btn';
+      deleteBtn.innerHTML = '🗑️';
+      deleteBtn.onclick = e => {
+        e.stopPropagation();
+        imageDataList.splice(index, 1);
+        renderPreview();
+      };
+
+      const rotateBtn = document.createElement('button');
+      rotateBtn.className = 'rotate-btn';
+      rotateBtn.innerHTML = '↻';
+      rotateBtn.onclick = e => {
+        e.stopPropagation();
+        data.rotation = (data.rotation + 90) % 360;
+        renderPreview();
+      };
+
+      wrapper.appendChild(deleteBtn);
+      wrapper.appendChild(rotateBtn);
+      wrapper.appendChild(img);
+      preview.appendChild(wrapper);
+
+      wrapper.addEventListener('dragstart', e => {
+        dragSrcIndex = index;
+        e.dataTransfer.effectAllowed = 'move';
+        wrapper.style.opacity = '0.5';
+      });
+      wrapper.addEventListener('dragend', () => {
+        dragSrcIndex = null;
+        wrapper.style.opacity = '';
+      });
+      wrapper.addEventListener('dragover', e => {
+        e.preventDefault();
+      });
+      wrapper.addEventListener('drop', e => {
+        e.preventDefault();
+        if (dragSrcIndex === null || dragSrcIndex === index) return;
+        const draggedItem = imageDataList[dragSrcIndex];
+        imageDataList.splice(dragSrcIndex, 1);
+        imageDataList.splice(index, 0, draggedItem);
+        renderPreview();
+      });
+    });
+  }
+
+  async function previewPDF() {
+    exportPreview.innerHTML = '';
+    if (imageDataList.length === 0) {
+      exportPreview.innerHTML = '<p>No images to preview.</p>';
+      exportModal.style.display = 'block';
+      return;
+    }
+
+    for (let i = 0; i < imageDataList.length; i++) {
+      const canvas = await generateCanvas(imageDataList[i], 20);
+      exportPreview.appendChild(canvas);
+    }
+    exportModal.style.display = 'block';
+  }
+
+  async function exportPDF() {
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+
+    const pageWidth = 595.28;
+    const pageHeight = 841.89;
+    const paddingLeftRight = 20;
+    const paddingTop = 10;
+    const paddingBottom = 10;
+
+    const printableWidth = pageWidth - 2 * paddingLeftRight;
+    const printableHeight = pageHeight - paddingTop - paddingBottom;
+
+    for (let i = 0; i < imageDataList.length; i++) {
+      const canvas = await generateCanvas(imageDataList[i], paddingTop + paddingBottom);
+      const imgData = canvas.toDataURL('image/jpeg', 0.9);
+
+      if (i > 0) pdf.addPage();
+
+      const xOffset = paddingLeftRight + (printableWidth - canvas.width) / 2;
+      const yOffset = paddingTop + (printableHeight - canvas.height) / 2;
+
+      pdf.addImage(imgData, 'JPEG', xOffset, yOffset, canvas.width, canvas.height);
+    }
+
+    const fileName = document.getElementById('docName').value.trim() || 'CompiledImages';
+    pdf.save(`${fileName}.pdf`);
+  }
+
+  async function generateCanvas({ src, rotation, width, height }, verticalPadding = 20) {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+
+    const A4_WIDTH = 595.28 - 40;
+    const A4_HEIGHT = 841.89 - verticalPadding;
+
+    const isRotated = rotation === 90 || rotation === 270;
+
+    const safeWidth = isRotated ? A4_HEIGHT : A4_WIDTH;
+    const safeHeight = isRotated ? A4_WIDTH : A4_HEIGHT;
+
+    const widthScale = safeWidth / width;
+    const heightScale = safeHeight / height;
+    const scale = Math.min(widthScale, heightScale, 1);
+
+    const canvasWidth = isRotated ? height * scale : width * scale;
+    const canvasHeight = isRotated ? width * scale : height * scale;
+
+    resizeCanvas.width = canvasWidth;
+    resizeCanvas.height = canvasHeight;
+    resizeCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    resizeCtx.save();
+
+    if (rotation === 90) {
+      resizeCtx.translate(canvasWidth, 0);
+      resizeCtx.rotate(Math.PI / 2);
+    } else if (rotation === 180) {
+      resizeCtx.translate(canvasWidth, canvasHeight);
+      resizeCtx.rotate(Math.PI);
+    } else if (rotation === 270) {
+      resizeCtx.translate(0, canvasHeight);
+      resizeCtx.rotate(-Math.PI / 2);
+    }
+
+    resizeCtx.drawImage(img, 0, 0, width * scale, height * scale);
+    resizeCtx.restore();
+
+    const canvasCopy = document.createElement('canvas');
+    canvasCopy.width = canvasWidth;
+    canvasCopy.height = canvasHeight;
+    canvasCopy.getContext('2d').drawImage(resizeCanvas, 0, 0);
+    return canvasCopy;
+  }
+</script>
+</body>
+</html>
